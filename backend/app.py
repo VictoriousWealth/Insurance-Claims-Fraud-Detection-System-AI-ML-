@@ -75,6 +75,8 @@ dash_app.layout = html.Div([
         sort_action="native",
         style_table={"overflowX": "auto"}
     ),
+    
+
     html.H1("Displaying the data for claims"),
     dash_table.DataTable(
         id="insurance_table",
@@ -83,9 +85,10 @@ dash_app.layout = html.Div([
         sort_action="native",
         style_table={"overflowX": "auto"}
     ),
+    
     html.H2("Numbers of losses per date"),
     dcc.Tabs(
-        id="plot_tabs",
+        id="losses_plot_tabs",
         value="line",  # default selected tab
         children=[
             dcc.Tab(label="Line Plot", value="line"),
@@ -95,8 +98,51 @@ dash_app.layout = html.Div([
     ),
     dcc.Graph(
         id="losses_graph",
-        figure={"data": [], "layout": {"title": "Loading..."}}  # default valid figure
+        figure={"data": [], "layout": {"title": "Loading..."}}  
     ),
+    
+    html.H2("Claims against premium amount"),
+    dcc.Tabs(
+        id="claim_vs_premium_tabs",
+        value="scatter",  
+        children=[
+            dcc.Tab(label="Scatter Plot", value="scatter"),
+        ]
+    ),
+    dcc.Graph(
+        id="claim_vs_premium_graph",
+        figure={"data": [], "layout": {"title": "Loading..."}}  
+    ),
+    
+    html.H2("Polocy date against Loss date"),
+    dcc.Tabs(
+        id="policy_vs_loss_tabs",
+        value="scatter",  
+        children=[
+            dcc.Tab(label="Scatter Plot", value="scatter"),
+        ]
+    ),
+    dcc.Graph(
+        id="policy_vs_loss_graph",
+        figure={"data": [], "layout": {"title": "Loading..."}} 
+    ),
+
+    html.H2("Claim Amount Against Days of Grace"),
+    dcc.Tabs(
+        id="days_of_grace_vs_claim_tabs",
+        value="scatter",  
+        children=[
+            dcc.Tab(label="Scatter Plot", value="scatter"),
+            dcc.Tab(label="Line Plot", value="line"),
+            dcc.Tab(label="Histogram Plot", value="histogram"),
+        ]
+    ),
+    dcc.Graph(
+        id="days_of_grace_vs_claim_graph",
+        figure={"data": [], "layout": {"title": "Loading..."}} 
+    ),
+    
+    
     html.H1("Displaying the data for investigators"),
     dash_table.DataTable(
         id="vendor_table",
@@ -105,7 +151,7 @@ dash_app.layout = html.Div([
         sort_action="native",
         style_table={"overflowX": "auto"}
     ),
-    # For testing, consider making the button visible initially
+    
     dcc.Interval(
         id='interval-component',
         interval=60*1000,  # 60 seconds in milliseconds
@@ -159,9 +205,10 @@ def update_vendor_table(n_clicks):
             return columns, data
     return [], []
 
+# graph no of claims against time
 @dash_app.callback(
     Output("losses_graph", "figure"),
-    Input("plot_tabs", "value")
+    Input("losses_plot_tabs", "value")
 )
 def update_plot(selected_plot):
     response = requests.get("http://127.0.0.1:8000/api/insurance")
@@ -205,8 +252,129 @@ def update_plot(selected_plot):
             return fig
     return {"data": [], "layout": {"title": "No data available"}}
 
+# graph claim amount vs premium amount
+@dash_app.callback(
+    Output("claim_vs_premium_graph", "figure"),
+    Input("claim_vs_premium_tabs", "value")
+)
+def update_plot(selected_plot):
+    response = requests.get("http://127.0.0.1:8000/api/insurance")
+    if response.status_code == 200:
+        data = response.json()
+        claimsVsPremiums = [[record.get("CLAIM_AMOUNT"), record.get("PREMIUM_AMOUNT")] for record in data if "CLAIM_AMOUNT" and "PREMIUM_AMOUNT" in record]
+        df = pandas.DataFrame(claimsVsPremiums, columns=["CLAIM_AMOUNT", "PREMIUM_AMOUNT"])
+        if not df.empty:
+            return px.scatter(
+                df,
+                x="PREMIUM_AMOUNT",
+                y="CLAIM_AMOUNT",
+                title="Scatter Plot: Premium Against Claims"
+            )
+    return {"data": [], "layout": {"title": "No data available"}}
+
+# graph report date vs policy effectual date
+@dash_app.callback(
+    Output("policy_vs_loss_graph", "figure"),
+    Input("policy_vs_loss_tabs", "value")
+)
+def update_plot(selected_plot):
+    response = requests.get("http://127.0.0.1:8000/api/insurance")
+    if response.status_code == 200:
+        data = response.json()
+        policyVsLoss = [[record.get("POLICY_EFF_DT"), record.get("LOSS_DT")] for record in data if "POLICY_EFF_DT" and "LOSS_DT" in record]
+        df = pandas.DataFrame(policyVsLoss, columns=["POLICY_EFF_DT", "LOSS_DT"])
+        
+        # converting into datetime objects
+        df["LOSS_DT"] = pandas.to_datetime(df["LOSS_DT"], errors='coerce')
+        df = df.dropna(subset=["LOSS_DT"])
+        df["POLICY_EFF_DT"] = pandas.to_datetime(df["POLICY_EFF_DT"], errors='coerce')
+        df = df.dropna(subset=["POLICY_EFF_DT"])
+
+        if not df.empty:
+            return px.scatter(
+                df,
+                x="POLICY_EFF_DT",
+                y="LOSS_DT",
+                title="Scatter Plot: Policy date Against Loss date"
+            )
+    return {"data": [], "layout": {"title": "No data available"}}
+
+@dash_app.callback(
+    Output("days_of_grace_vs_claim_graph", "figure"),
+    Input("days_of_grace_vs_claim_tabs", "value")
+)
+def update_plot(selected_plot):
+    # Fetch insurance data from the API
+    response = requests.get("http://127.0.0.1:8000/api/insurance")
+    if response.status_code == 200:
+        data = response.json()
+        # Build a list of tuples only if all required keys exist
+        records = [
+            (
+                record.get("POLICY_EFF_DT"),
+                record.get("LOSS_DT"),
+                record.get("CLAIM_AMOUNT")
+            )
+            for record in data
+            if "POLICY_EFF_DT" in record and "LOSS_DT" in record and "CLAIM_AMOUNT" in record
+        ]
+        
+        # If there are no valid records, return an empty figure.
+        if not records:
+            return {"data": [], "layout": {"title": "No data available"}}
+        
+        # Create a DataFrame with proper column names.
+        df = pandas.DataFrame(records, columns=["POLICY_EFF_DT", "LOSS_DT", "CLAIM_AMOUNT"])
+        
+        # Convert date columns to datetime objects.
+        df["POLICY_EFF_DT"] = pandas.to_datetime(df["POLICY_EFF_DT"], errors='coerce')
+        df["LOSS_DT"] = pandas.to_datetime(df["LOSS_DT"], errors='coerce')
+        # Drop rows with invalid dates or missing claim amounts.
+        df = df.dropna(subset=["POLICY_EFF_DT", "LOSS_DT", "CLAIM_AMOUNT"])
+        
+        # Compute the difference between LOSS_DT and POLICY_EFF_DT in days.
+        df["DAYS_OF_GRACE"] = (df["LOSS_DT"] - df["POLICY_EFF_DT"]).dt.days
+        
+        # Create the figure based on the selected tab.
+        if selected_plot == "line":
+            # For a line plot, sort by DAYS_OF_GRACE.
+            fig = px.line(
+                df.sort_values("DAYS_OF_GRACE"),
+                x="DAYS_OF_GRACE",
+                y="CLAIM_AMOUNT",
+                title="Line Plot: Claim Amount vs. Days of Grace"
+            )
+        elif selected_plot == "scatter":
+            fig = px.scatter(
+                df,
+                x="DAYS_OF_GRACE",
+                y="CLAIM_AMOUNT",
+                title="Scatter Plot: Claim Amount vs. Days of Grace"
+            )
+        elif selected_plot == "histogram":
+            # Histogram showing the distribution of claim amounts over different grace periods.
+            fig = px.histogram(
+                df,
+                x="DAYS_OF_GRACE",
+                y="CLAIM_AMOUNT",
+                title="Histogram: Claim Amount vs. Days of Grace",
+                nbins=50
+            )
+        else:
+            # In case of an unrecognized tab value, return an empty figure.
+            fig = {"data": []}
+        
+        return fig
+    # If the API call fails, return an empty figure with a message.
+    return {"data": [], "layout": {"title": "No data available"}}
+
 # Mount Dash inside FastAPI
 fastapi_app.mount("/dash", WSGIMiddleware(dash_app.server))
 
 if __name__ == "__main__":
     uvicorn.run(fastapi_app, host="127.0.0.1", port=8000)
+
+# check the date difference between report date and policy effective date
+# check the date difference between incident date and policy effective date
+# check where incident date is before policy effective date
+# check where report date is before policy effective date
